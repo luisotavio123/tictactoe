@@ -3,8 +3,9 @@
 #include <mutex>
 #include <condition_variable>
 #include <array>
+#include <cstdlib>
+#include <ctime>
 
-// Classe TicTacToe
 class TicTacToe {
 private:
     std::array<std::array<char, 3>, 3> board; // Tabuleiro do jogo
@@ -15,34 +16,89 @@ private:
     char winner; // Vencedor do jogo
 
 public:
-    TicTacToe() {
-        // Inicializar o tabuleiro e as variáveis do jogo
+    TicTacToe() : current_player('X'), game_over(false), winner(' ') {
+        // Inicializar o tabuleiro com espaços em branco
+        for (auto& row : board) {
+            row.fill(' ');
+        }
     }
 
     void display_board() {
-        // Exibir o tabuleiro no console
+        std::cout << "\nTabuleiro atual:\n";
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                std::cout << board[i][j];
+                if (j < 2) std::cout << " | ";
+            }
+            std::cout << "\n";
+            if (i < 2) std::cout << "---------\n";
+        }
+        std::cout << std::endl;
     }
 
     bool make_move(char player, int row, int col) {
-        // Implementar a lógica para realizar uma jogada no tabuleiro
-        // Utilizar mutex para controle de acesso
-        // Utilizar variável de condição para alternância de turnos
+        std::unique_lock<std::mutex> lock(board_mutex);
+
+        // Esperar até que seja a vez do jogador ou o jogo tenha terminado
+        turn_cv.wait(lock, [this, player] { return current_player == player || game_over; });
+
+        // Se o jogo terminou, sair imediatamente
+        if (game_over) {
+            return false;
+        }
+
+        if (board[row][col] == ' ') {
+            board[row][col] = player;
+            display_board();
+
+            // Verificar vitória e empate
+            if (check_win(player)) {
+                game_over = true;
+                winner = player;
+            } else if (check_draw()) {
+                game_over = true;
+                winner = 'D';
+            }
+
+            // Alternar o jogador
+            current_player = (player == 'X') ? 'O' : 'X';
+
+            // Notificar o próximo jogador ou encerrar as threads se o jogo acabou
+            turn_cv.notify_all();
+            return true;
+        }
+
+        return false;
     }
 
     bool check_win(char player) {
-        // Verificar se o jogador atual venceu o jogo
+        // Verificar linhas, colunas e diagonais
+        for (int i = 0; i < 3; i++) {
+            if (board[i][0] == player && board[i][1] == player && board[i][2] == player) return true;
+            if (board[0][i] == player && board[1][i] == player && board[2][i] == player) return true;
+        }
+        if (board[0][0] == player && board[1][1] == player && board[2][2] == player) return true;
+        if (board[0][2] == player && board[1][1] == player && board[2][0] == player) return true;
+
+        return false;
     }
 
     bool check_draw() {
-        // Verificar se houve um empate
+        for (const auto& row : board) {
+            for (const auto& cell : row) {
+                if (cell == ' ') return false;
+            }
+        }
+        return true;
     }
 
     bool is_game_over() {
-        // Retornar se o jogo terminou
+        std::unique_lock<std::mutex> lock(board_mutex);
+        return game_over;
     }
 
     char get_winner() {
-        // Retornar o vencedor do jogo ('X', 'O', ou 'D' para empate)
+        return winner;
     }
 };
 
@@ -54,32 +110,81 @@ private:
     std::string strategy; // Estratégia do jogador
 
 public:
-    Player(TicTacToe& g, char s, std::string strat) 
-        : game(g), symbol(s), strategy(strat) {}
+    Player(TicTacToe& g, char s, const std::string& strat)
+        : game(g), symbol(s), strategy(strat) {
+        std::srand(std::time(0)); // Inicializar a semente do gerador de números aleatórios
+    }
 
     void play() {
-        // Executar jogadas de acordo com a estratégia escolhida
+        while (true) {
+            if (game.is_game_over()) {
+                break;
+            }
+
+            if (strategy == "sequencial") {
+                play_sequential();
+            } else {
+                play_random();
+            }
+
+            if (game.is_game_over()) {
+                break;
+            }
+        }
     }
 
 private:
     void play_sequential() {
-        // Implementar a estratégia sequencial de jogadas
+        // Percorre o tabuleiro sequencialmente até encontrar uma posição livre para jogar
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                if (game.make_move(symbol, row, col)) {
+                    return; // Sai da função após fazer a jogada
+                }
+            }
+        }
     }
 
     void play_random() {
-        // Implementar a estratégia aleatória de jogadas
+        // Tenta fazer uma jogada aleatória até encontrar uma posição livre
+        int row, col;
+        while (true) {
+            row = std::rand() % 3; // Gera uma linha aleatória entre 0 e 2
+            col = std::rand() % 3; // Gera uma coluna aleatória entre 0 e 2
+            if (game.make_move(symbol, row, col)) {
+                return; // Sai da função após fazer a jogada
+            }
+            if (game.is_game_over()) {
+                return; // Verifica se o jogo terminou durante a busca
+            }
+        }
     }
 };
 
 // Função principal
 int main() {
-    // Inicializar o jogo e os jogadores
+    // Inicializar o jogo
+    TicTacToe game;
+
+    // Inicializar os jogadores
+    Player player1(game, 'X', "sequencial");
+    Player player2(game, 'O', "aleatório");
 
     // Criar as threads para os jogadores
+    std::thread t1(&Player::play, &player1);
+    std::thread t2(&Player::play, &player2);
 
     // Aguardar o término das threads
+    t1.join();
+    t2.join();
 
     // Exibir o resultado final do jogo
+    std::cout << "Jogo terminado! ";
+    if (game.get_winner() == 'D') {
+        std::cout << "Resultado: Empate! 'D' " << std::endl;
+    } else {
+        std::cout << "Vencedor: Jogador " << game.get_winner() << "!" << std::endl;
+    }
 
     return 0;
 }
